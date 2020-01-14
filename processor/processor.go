@@ -1,4 +1,4 @@
-package hooks
+package processor
 
 import (
 	"github.com/pkg/errors"
@@ -9,12 +9,31 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-type AnyHook struct {
+type Processor interface {
+	Process(obj runtime.Unstructured) (runtime.Unstructured, error)
 }
 
-func (h *AnyHook) Execute(obj runtime.Unstructured) (runtime.Unstructured, error) {
-	objCopy := obj.DeepCopyObject()
-	accessor, err := meta.Accessor(objCopy)
+type SkipOwnerReferencesProcessor struct{}
+
+func (p *SkipOwnerReferencesProcessor) Process(obj runtime.Unstructured) (runtime.Unstructured, error) {
+	accessor, err := meta.Accessor(obj)
+	if err != nil {
+		return nil, err
+	}
+	// https://kubernetes.io/docs/concepts/workloads/controllers/garbage-collection/
+	if len(accessor.GetOwnerReferences()) > 0 {
+		logrus.WithFields(logrus.Fields{
+			"Name": accessor.GetName(),
+		}).Debugln("Object has OwnerReferences, skip")
+		return nil, nil
+	}
+	return obj, nil
+}
+
+type CommonProcessor struct{}
+
+func (p *CommonProcessor) Process(obj runtime.Unstructured) (runtime.Unstructured, error) {
+	accessor, err := meta.Accessor(obj)
 	if err != nil {
 		return nil, err
 	}
@@ -29,7 +48,7 @@ func (h *AnyHook) Execute(obj runtime.Unstructured) (runtime.Unstructured, error
 	accessor.SetAnnotations(annotations)
 
 	var rv runtime.Unstructured
-	unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(objCopy)
+	unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
 	if err != nil {
 		return nil, err
 	}
@@ -37,20 +56,13 @@ func (h *AnyHook) Execute(obj runtime.Unstructured) (runtime.Unstructured, error
 	content := rv.UnstructuredContent()
 	delete(content, "Status")
 	rv.SetUnstructuredContent(content)
-
 	return rv, nil
 }
 
-type Hook interface {
-	Execute(obj runtime.Unstructured) (runtime.Unstructured, error)
-}
+type JobProcessor struct{}
 
-type JobHook struct {
-	logger logrus.FieldLogger
-}
-
-func (h *JobHook) Execute(obj runtime.Unstructured) (runtime.Unstructured, error) {
-	if obj.GetObjectKind().GroupVersionKind().Kind != "Job"{
+func (h *JobProcessor) Process(obj runtime.Unstructured) (runtime.Unstructured, error) {
+	if obj.GetObjectKind().GroupVersionKind().Kind != "Job" {
 		return obj, nil
 	}
 	job := new(batchv1api.Job)

@@ -4,16 +4,16 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 
-	"github.com/earlzo/kubeexport/cmd"
-	"github.com/earlzo/kubeexport/engine"
+	"github.com/elonzh/kubeexport/cmd"
+	"github.com/elonzh/kubeexport/exporter"
 )
 
 func NewCommand() *cobra.Command {
-	e := engine.NewEngine()
+	e := exporter.NewExporter()
 	var rootCmd = &cobra.Command{
-		Use:     "kubeexport [flags] resourceTypes...",
-		Short:   "Export resources from your kubernetes cluster",
-		Long:    "Export resources from your kubernetes cluster",
+		Use:   "kubeexport [flags] resourceTypes...",
+		Short: "Export resources from your kubernetes cluster",
+		Long:  "Export resources from your kubernetes cluster",
 		Example: `
 	# export all exportable resources into directory "exported_resources"
 	kubeexport -o "exported_resources" 

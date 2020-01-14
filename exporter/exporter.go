@@ -1,4 +1,4 @@
-package engine
+package exporter
 
 import (
 	"os"
@@ -14,9 +14,9 @@ import (
 	"k8s.io/cli-runtime/pkg/printers"
 	"k8s.io/cli-runtime/pkg/resource"
 
-	"github.com/earlzo/kubeexport"
-	"github.com/earlzo/kubeexport/flags"
-	"github.com/earlzo/kubeexport/hooks"
+	"github.com/elonzh/kubeexport"
+	"github.com/elonzh/kubeexport/flags"
+	"github.com/elonzh/kubeexport/processor"
 )
 
 func IsListable(r *metav1.APIResource) bool {
@@ -28,32 +28,33 @@ func IsListable(r *metav1.APIResource) bool {
 	return false
 }
 
-type Engine struct {
+type Exporter struct {
 	configFlags           *genericclioptions.ConfigFlags
 	printFlags            *genericclioptions.PrintFlags
 	outputFlags           *flags.OutPutFlags
 	printer               printers.ResourcePrinter
 	excludedResourceTypes []string
 
-	hks []hooks.Hook
+	processors []processor.Processor
 }
 
-func NewEngine() *Engine {
-	engine := Engine{
+func NewExporter() *Exporter {
+	engine := Exporter{
 		configFlags:           genericclioptions.NewConfigFlags(false),
 		printFlags:            genericclioptions.NewPrintFlags(""),
 		outputFlags:           &flags.OutPutFlags{},
 		excludedResourceTypes: []string{"endpoints", "events"},
-		hks: []hooks.Hook{
-			&hooks.AnyHook{},
-			&hooks.JobHook{},
+		processors: []processor.Processor{
+			&processor.SkipOwnerReferencesProcessor{},
+			&processor.CommonProcessor{},
+			&processor.JobProcessor{},
 		},
 	}
 	engine.printFlags.WithDefaultOutput("yaml")
 	return &engine
 }
 
-func (e *Engine) AddFlags(cmd *cobra.Command) {
+func (e *Exporter) AddFlags(cmd *cobra.Command) {
 	e.configFlags.AddFlags(cmd.PersistentFlags())
 	e.printFlags.AddFlags(cmd)
 	e.outputFlags.AddFlags(cmd)
@@ -69,7 +70,7 @@ func Contains(slice []string, elem string) bool {
 	return false
 }
 
-func (e *Engine) LoadResourceTypes() []string {
+func (e *Exporter) LoadResourceTypes() []string {
 	var resourceTypes = make([]string, 0, 10)
 	discoveryClient, err := e.configFlags.ToDiscoveryClient()
 	if err != nil {
@@ -90,7 +91,7 @@ func (e *Engine) LoadResourceTypes() []string {
 	return resourceTypes
 }
 
-func (e *Engine) Run(resourceTypes ...string) {
+func (e *Exporter) Run(resourceTypes ...string) {
 	e.outputFlags.ValidateDir()
 	var err error
 
@@ -148,7 +149,7 @@ func (e *Engine) Run(resourceTypes ...string) {
 
 }
 
-func (e *Engine) VisitObject(info *resource.Info, err error) error {
+func (e *Exporter) VisitObject(info *resource.Info, err error) error {
 	if err != nil {
 		return err
 	}
@@ -170,14 +171,28 @@ func (e *Engine) VisitObject(info *resource.Info, err error) error {
 	return nil
 }
 
-func (e *Engine) exportObject(info *resource.Info, obj runtime.Object, pathFunc kubeexport.ObjectPathFunc) error {
+func (e *Exporter) exportObject(info *resource.Info, obj runtime.Object, pathFunc kubeexport.ObjectPathFunc) error {
+	var rv runtime.Unstructured
+	unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		logrus.WithError(err).Fatalln(err)
+	}
+	rv = &unstructured.Unstructured{Object: unstructuredObj}
+	for i := 0; i < len(e.processors) && rv != nil; i++ {
+		rv, err = e.processors[i].Process(rv)
+		if err != nil {
+			logrus.WithError(err).Fatalln(err)
+		}
+	}
+	if rv == nil {
+		return nil
+	}
+
 	err, dir, filename := pathFunc(info.Mapping, obj)
 	if err != nil || filename == "" {
 		return err
 	}
-
 	dir = e.outputFlags.EnsureDir(dir)
-
 	file, err := os.Create(filepath.Join(dir, filename+"."+*e.printFlags.OutputFormat))
 	if err != nil {
 		logrus.WithError(err).Fatalln(err)
@@ -188,18 +203,5 @@ func (e *Engine) exportObject(info *resource.Info, obj runtime.Object, pathFunc 
 			logrus.WithError(err).WithField("filename", file.Name()).Fatalln("error when closing file")
 		}
 	}()
-
-	var rv runtime.Unstructured
-	unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
-	if err != nil {
-		logrus.WithError(err).Fatalln(err)
-	}
-	rv = &unstructured.Unstructured{Object: unstructuredObj}
-	for _, hk := range e.hks {
-		rv, err = hk.Execute(rv)
-		if err != nil {
-			logrus.WithError(err).Fatalln(err)
-		}
-	}
 	return e.printer.PrintObj(rv, file)
 }

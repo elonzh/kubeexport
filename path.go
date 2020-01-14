@@ -2,9 +2,11 @@ package kubeexport
 
 import (
 	"path/filepath"
+	"strings"
+	"text/template"
 
-	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/meta"
+	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -16,13 +18,6 @@ func DefaultObjectPath(mapping *meta.RESTMapping, obj runtime.Object) (err error
 		return err, "", ""
 	}
 	filename := accessor.GetName()
-	// https://kubernetes.io/docs/concepts/workloads/controllers/garbage-collection/
-	if len(accessor.GetOwnerReferences()) > 0 {
-		logrus.WithFields(logrus.Fields{
-			"Name": filename,
-		}).Infoln("Object has OwnerReferences, skip")
-		return err, "", ""
-	}
 	labels := accessor.GetLabels()
 	appName := labels["app"]
 	namespace := accessor.GetNamespace()
@@ -34,4 +29,22 @@ func DefaultObjectPath(mapping *meta.RESTMapping, obj runtime.Object) (err error
 		dir = filepath.Join("projects", appName, mapping.Resource.Resource)
 	}
 	return nil, dir, filename
+}
+
+func DefaultTemplatePath(mapping *meta.RESTMapping, obj runtime.Object) (err error, dir, file string) {
+	accessor, err := meta.Accessor(obj)
+	if err != nil {
+		return err, "", ""
+	}
+	filename := accessor.GetName()
+	path := &strings.Builder{}
+	t := template.Must(template.New("path_template").Parse(`{{-.Mapping.Resource.Resource-}}`))
+	err = t.Execute(path, struct {
+		Mapping *meta.RESTMapping
+		Object  *v1.Object
+	}{mapping, &accessor})
+	if err != nil {
+		return err, "", ""
+	}
+	return nil, path.String(), filename
 }

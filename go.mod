@@ -1,4 +1,4 @@
-module github.com/earlzo/kubeexport
+module github.com/elonzh/kubeexport
 
 go 1.13
 
