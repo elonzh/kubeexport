@@ -30,6 +30,26 @@ func (p *SkipOwnerReferencesProcessor) Process(obj runtime.Unstructured) (runtim
 	return obj, nil
 }
 
+func deleteStringFields(m map[string]string, fields ...string) map[string]string {
+	for _, f := range fields {
+		delete(m, f)
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
+func deleteInterfaceFields(m map[string]interface{}, fields ...string) map[string]interface{} {
+	for _, f := range fields {
+		delete(m, f)
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
 type CommonProcessor struct{}
 
 func (p *CommonProcessor) Process(obj runtime.Unstructured) (runtime.Unstructured, error) {
@@ -41,11 +61,12 @@ func (p *CommonProcessor) Process(obj runtime.Unstructured) (runtime.Unstructure
 	accessor.SetResourceVersion("")
 	accessor.SetSelfLink("")
 	accessor.SetUID("")
-	annotations := accessor.GetAnnotations()
-	delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
-	delete(annotations, "deployment.kubernetes.io/revision")
-	delete(annotations, "kubernetes.io/change-cause")
-	accessor.SetAnnotations(annotations)
+	accessor.SetAnnotations(deleteStringFields(
+		accessor.GetAnnotations(),
+		"kubectl.kubernetes.io/last-applied-configuration",
+		"deployment.kubernetes.io/revision",
+		"kubernetes.io/change-cause",
+	))
 
 	var rv runtime.Unstructured
 	unstructuredObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
@@ -53,9 +74,8 @@ func (p *CommonProcessor) Process(obj runtime.Unstructured) (runtime.Unstructure
 		return nil, err
 	}
 	rv = &unstructured.Unstructured{Object: unstructuredObj}
-	content := rv.UnstructuredContent()
-	delete(content, "Status")
-	rv.SetUnstructuredContent(content)
+
+	rv.SetUnstructuredContent(deleteInterfaceFields(rv.UnstructuredContent(), "status"))
 	return rv, nil
 }
 
@@ -70,16 +90,13 @@ func (h *JobProcessor) Process(obj runtime.Unstructured) (runtime.Unstructured, 
 		return nil, errors.WithStack(err)
 	}
 
-	if job.Spec.Selector != nil {
-		delete(job.Spec.Selector.MatchLabels, "controller-uid")
-	}
-	delete(job.Spec.Template.ObjectMeta.Labels, "controller-uid")
-
-	job.Status = batchv1api.JobStatus{}
+	job.Spec.Selector.MatchLabels = deleteStringFields(job.Spec.Selector.MatchLabels, "controller-uid")
+	job.Spec.Template.ObjectMeta.Labels = deleteStringFields(job.Spec.Template.ObjectMeta.Labels, "controller-uid")
 
 	res, err := runtime.DefaultUnstructuredConverter.ToUnstructured(job)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	res = deleteInterfaceFields(res, "status")
 	return &unstructured.Unstructured{Object: res}, nil
 }
