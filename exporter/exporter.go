@@ -109,7 +109,10 @@ func (e *Exporter) Run(resourceTypes ...string) {
 	if contextName == "" {
 		contextName = rawConfig.CurrentContext
 	}
-	currentContext := rawConfig.Contexts[contextName]
+	currentContext, ok := rawConfig.Contexts[contextName]
+	if !ok {
+		logrus.WithField("ContextName", contextName).Fatalln("no such context")
+	}
 	clusterName := *e.configFlags.ClusterName
 	if clusterName == "" {
 		clusterName = currentContext.Cluster
